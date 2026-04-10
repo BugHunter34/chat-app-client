@@ -82,7 +82,7 @@ def main(page: ft.Page):
     # --- Handlers ---
     # erorr popup
     def show_snack(msg, color):
-        snack = ft.SnackBar(content=ft.Text(msg, color=WHITE), bgcolor=color)
+        snack = ft.SnackBar(content=ft.Text(msg, color=BLACK, bold=True), bgcolor=color)
         page.overlay.append(snack)
         snack.open = True
         page.update()
@@ -124,6 +124,12 @@ def main(page: ft.Page):
                 return
 
             if res.get("status") == "success":
+                # save token if accepted cookies
+                async def save_token():
+                    if await prefs.get("cookies_accepted"):
+                        await prefs.set("auth_token", res.get("token"))
+                page.run_task(save_token)
+
                 build_chat_ui(
                     res.get("username", user_field.value), 
                     res.get("role", "user"),
@@ -165,6 +171,22 @@ def main(page: ft.Page):
         def set_active_chat(friend_name):
             app_state["active_chat"] = friend_name
             chat_header.value = f"Chatting with {friend_name}"
+
+            # load history when selected chat
+            try:
+                res = requests.get(f"{API_URL}/messages", params={"user1": current_username, "user2": friend_name}).json()
+                if res.get("status") == "success":
+                    app_state["local_chat_history"][friend_name] = []
+                    for msg in res["messages"]:
+                        sender = msg["sender"]
+                        content = msg["content"]
+                        
+                        # Formater
+                        color = NEON_GREEN if sender == current_username else WHITE
+                        prefix = "You" if sender == current_username else sender
+                        app_state["local_chat_history"][friend_name].append({"text": f"{prefix}: {content}", "color": color})
+            except Exception as e:
+                show_snack("Couldn't load chat history", RED)
             refresh_chat_display()
 
         def check_active_user(friend_name):
@@ -552,6 +574,60 @@ def main(page: ft.Page):
 
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
-    page.add(login_card)
+
+    # --- Cookie auto login ---
+    prefs = ft.SharedPreferences()
+
+    def show_cookie_banner():
+        def accept_cookies(e):
+            # Save cookie async
+            page.run_task(prefs.set, "cookies_accepted", True)
+            cookie_banner.open = False
+            page.update()
+
+        cookie_banner = ft.BottomSheet(
+            ft.Container(
+                padding=20,
+                bgcolor=DARK_GREY,
+                content=ft.Column([
+                    ft.Text("our cookies keep you logged in for 24h", color=WHITE),
+                    ft.ElevatedButton("Accept", on_click=accept_cookies, bgcolor=NEON_GREEN, color=BLACK)
+                ], tight=True)
+            )
+        )
+        page.overlay.append(cookie_banner)
+        cookie_banner.open = True
+        page.update()
+
+    # async to check token while app is loading
+    async def boot_app():
+        saved_token = await prefs.get("auth_token")
+        
+        if saved_token:
+            try:
+                res = requests.get(f"{API_URL}/verify-token", params={"token": saved_token}, timeout=5).json()
+                if res.get("status") == "success":
+                    build_chat_ui(
+                        res.get("username"), 
+                        res.get("role", "user"), 
+                        res.get("friends", []), 
+                        res.get("friendRequests", [])
+                    )
+                    return # exit
+            except Exception:
+                await prefs.remove("auth_token")
+
+        # if invalid show login
+        page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+        page.vertical_alignment = ft.MainAxisAlignment.CENTER
+        page.add(login_card)
+
+        # check if accepted
+        cookies_accepted = await prefs.get("cookies_accepted")
+        if not cookies_accepted:
+            show_cookie_banner()
+
+    # run the boot
+    page.run_task(boot_app)
 
 ft.run(main)
