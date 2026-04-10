@@ -18,7 +18,7 @@ except ImportError:
 SERVER_DOMAIN = "api.andhyy.com" 
 API_URL = f"https://{SERVER_DOMAIN}"
 
-# --- Colors ---
+# --- colors ---
 DARK_GREY = "#121212"
 BLACK = "#000000"
 RED_MAGENTA = "#FF0055"
