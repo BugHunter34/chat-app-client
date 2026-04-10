@@ -26,6 +26,41 @@ NEON_GREEN = "#00FF66"
 WHITE = "#FFFFFF"
 RED = "#FF0000"
 
+EMOJI_MAP = {
+    ":cry:": f"{API_URL}/emojis/cry-emoji.png",
+    #":lol:": f"{API_URL}/emojis/lol.png",
+    #":fire:": f"{API_URL}/emojis/fire.png"
+}
+
+def parse_message_to_ui(prefix_text, message_content, text_color):
+    """
+   split messages into text/emoji 
+    """
+    ui_controls = [ft.Text(f"{prefix_text}: ", color=text_color, weight="bold")]
+    
+    # split to check for codes
+    words = message_content.split()
+    
+    current_text = ""
+    for word in words:
+        if word in EMOJI_MAP:
+            if current_text:
+                ui_controls.append(ft.Text(current_text, color=text_color))
+                current_text = "" # Reset
+            
+            # add the tiny emoji
+            ui_controls.append(ft.Image(src=EMOJI_MAP[word], width=24, height=24))
+        else:
+            # the rest of text
+            current_text += word + " "
+            
+    # remaining text
+    if current_text:
+        ui_controls.append(ft.Text(current_text, color=text_color))
+         
+    # if too long go to next line
+    return ft.Row(controls=ui_controls, spacing=2, wrap=True)
+
 def main(page: ft.Page):
     page.title = "Andhyy Chat"
     page.bgcolor = DARK_GREY
@@ -163,30 +198,43 @@ def main(page: ft.Page):
         def refresh_chat_display():
             chat_display.controls.clear()
             friend_name = app_state["active_chat"]
+            
             if friend_name and friend_name in app_state["local_chat_history"]:
                 for msg_data in app_state["local_chat_history"][friend_name]:
-                    chat_display.controls.append(ft.Text(msg_data["text"], color=msg_data["color"]))
+                    
+                    sender = msg_data["sender"]
+                    content = msg_data["content"]
+                    
+                    # color based on sender
+                    color = NEON_GREEN if sender == current_username else WHITE
+                    prefix = "You" if sender == current_username else sender
+                    
+                    # build the emoji/text 
+                    bubble = parse_message_to_ui(prefix, content, color)
+                    chat_display.controls.append(bubble)
+                    
             page.update()
 
         def set_active_chat(friend_name):
             app_state["active_chat"] = friend_name
             chat_header.value = f"Chatting with {friend_name}"
-
-            # load history when selected chat
+            
+            # Fetch history from DB
             try:
                 res = requests.get(f"{API_URL}/messages", params={"user1": current_username, "user2": friend_name}).json()
                 if res.get("status") == "success":
+                    # clear so it doesnt duplicate
                     app_state["local_chat_history"][friend_name] = []
+                    
                     for msg in res["messages"]:
-                        sender = msg["sender"]
-                        content = msg["content"]
-                        
-                        # Formater
-                        color = NEON_GREEN if sender == current_username else WHITE
-                        prefix = "You" if sender == current_username else sender
-                        app_state["local_chat_history"][friend_name].append({"text": f"{prefix}: {content}", "color": color})
+                        # save to local history
+                        app_state["local_chat_history"][friend_name].append({
+                            "sender": msg["sender"], 
+                            "content": msg["content"]
+                        })
             except Exception as e:
                 show_snack("Couldn't load chat history", RED)
+
             refresh_chat_display()
 
         def check_active_user(friend_name):
@@ -258,10 +306,13 @@ def main(page: ft.Page):
                     if sender not in app_state["local_chat_history"]:
                         app_state["local_chat_history"][sender] = []
                     
-                    app_state["local_chat_history"][sender].append({"text": f"{sender}: {content}", "color": WHITE})
+                    # save raw
+                    app_state["local_chat_history"][sender].append({"sender": sender, "content": content})
                     
                     if app_state["active_chat"] == sender:
-                        chat_display.controls.append(ft.Text(f"{sender}: {content}", color=WHITE))
+                        # draw emoji/text 
+                        bubble = parse_message_to_ui(sender, content, WHITE)
+                        chat_display.controls.append(bubble)
                         page.update()
                     else:
                         show_snack(f"New message from {sender}", NEON_GREEN)
@@ -343,8 +394,8 @@ def main(page: ft.Page):
         chat_input_row = ft.Row(controls=[chat_input, send_btn])
 
         def send_msg(e):
-            if chat_input_row.value and app_state["active_chat"]:
-                msg_text = chat_input_row.value
+            if chat_input.value and app_state["active_chat"]:
+                msg_text = chat_input.value
                 friend = app_state["active_chat"]
                 
                 app_state["local_chat_history"][friend].append({"text": f"You: {msg_text}", "color": NEON_GREEN})
