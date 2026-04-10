@@ -2,31 +2,39 @@ import flet as ft
 import requests
 import asyncio
 import json
-import websockets
 
-# py
-SERVER_IP = "9ced-178-209-155-47.ngrok-free.app" 
-PORT = "8000"
-API_URL = f"https://{SERVER_IP}"
-WS_URL = f"wss://{SERVER_IP}/ws"
+# --- Cross Platform ---
+try:
+    # Web Mode (Pyodide)
+    import js
+    from pyodide.ffi import create_proxy
+    IS_WEB = True
+except ImportError:
+    # Desktop Mode 
+    import websockets
+    IS_WEB = False
 
-# Colors
-DARK_GREY = "#121212"        # Dark grey
-BLACK = "#000000"            # Black 
-RED_MAGENTA = "#FF0055"      # Magenta/Red 
-NEON_GREEN = "#00FF66"       # Neon green 
-WHITE = "#FFFFFF"            # White 
-RED = "#FF0000"              # Red
+# --- Config - domain ---
+SERVER_DOMAIN = "api.andhyy.com" 
+API_URL = f"https://{SERVER_DOMAIN}"
+
+# --- Colors ---
+DARK_GREY = "#121212"
+BLACK = "#000000"
+RED_MAGENTA = "#FF0055"
+NEON_GREEN = "#00FF66"
+WHITE = "#FFFFFF"
+RED = "#FF0000"
 
 def main(page: ft.Page):
-    page.title = "Chat Client"
+    page.title = "Andhyy Chat"
     page.bgcolor = DARK_GREY
     page.window.width = 1200
     page.window.height = 800
     page.theme_mode = ft.ThemeMode.DARK 
     page.padding = 0
 
-    # --- UI Components ---
+    # --- UI for login ---
     status_icon = ft.Icon(icon=ft.Icons.WIFI_OFF, size=50, color=RED)
     title = ft.Text("Connecting to server...", size=32, color=WHITE, weight=ft.FontWeight.W_800)
     
@@ -35,45 +43,71 @@ def main(page: ft.Page):
     pass_field = ft.TextField(label="Password", password=True, can_reveal_password=True, prefix_icon=ft.Icons.LOCK, border_color=RED_MAGENTA)
     
     snack_text = ft.Text("")
-    page.snack_bar = ft.SnackBar(snack_text)
+    page.snack_bar = ft.SnackBar(content=snack_text)
 
     is_connected = False
 
-    # --- Auto-Ping ---
+    # --- Ping ---
     async def auto_ping():
         nonlocal is_connected
         while not is_connected:
             try:
-                response = requests.get(f"{API_URL}/ping", timeout=2)
+                response = requests.get(f"{API_URL}/ping", timeout=3)
                 if response.status_code == 200:
-                    status_icon.icon = ft.Icons.WIFI
-                    status_icon.color = NEON_GREEN
-                    title.value = "Connected! Please Login."
-                    is_connected = True
+                    try:
+                        data = response.json() 
+                        status_icon.icon = ft.Icons.WIFI
+                        status_icon.color = NEON_GREEN
+                        title.value = "Connected! Please Login."
+                        is_connected = True
+                        page.update()
+                        break
+                    except ValueError:
+                        title.value = "Proxy error, Retrying..."
+                        page.update()
+                else:
+                    title.value = f"Server Offline ({response.status_code}). Retrying..."
                     page.update()
-                    break
+
             except requests.exceptions.RequestException:
-                pass # retry
+                title.value = "Server Offline. Retrying..."
+                status_icon.icon = ft.Icons.WIFI_OFF
+                status_icon.color = RED
+                page.update()
+                
             await asyncio.sleep(5)
 
     page.run_task(auto_ping)
 
+    # --- Handlers ---
+    # erorr popup
+    def show_snack(msg, color):
+        snack = ft.SnackBar(content=ft.Text(msg, color=WHITE), bgcolor=color)
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
 
-    # ---Button Handlers ---
     def handle_register(e):
         if not email_field.value or not user_field.value or not pass_field.value:
-            show_snack("Fill all fields!", RED)
+            show_snack("some Field is missing", RED)
             return
             
         payload = {"email": email_field.value, "userName": user_field.value, "password": pass_field.value}
         try:
-            res = requests.post(f"{API_URL}/register", json=payload).json()
+            response = requests.post(f"{API_URL}/register", json=payload, timeout=5)
+            try:
+                res = response.json()
+            except ValueError:
+                show_snack("Couldn't reach server (Proxy eror).", RED)
+                return
+
             if res.get("status") == "success":
-                show_snack("Registered! You can now login.", NEON_GREEN)
+                show_snack("Register success, please log in", NEON_GREEN)
             else:
-                show_snack(res.get("detail", res.get("message")), RED)
-        except Exception as ex:
-            show_snack("Connection Error", RED)
+                show_snack(res.get("detail", res.get("message", "Registration failed")), RED)
+                
+        except requests.exceptions.RequestException:
+            show_snack("Couldn't reach server.", RED)
 
     def handle_login(e):
         if not user_field.value or not pass_field.value:
@@ -82,223 +116,268 @@ def main(page: ft.Page):
 
         payload = {"userName": user_field.value, "password": pass_field.value}
         try:
-            res = requests.post(f"{API_URL}/login", json=payload).json()
+            response = requests.post(f"{API_URL}/login", json=payload, timeout=5)
+            try:
+                res = response.json()
+            except ValueError:
+                show_snack("Couldn't reach server (Proxy error)", RED)
+                return
+
             if res.get("status") == "success":
-                # Pass data to UI
                 build_chat_ui(
-                    res.get("username"), 
+                    res.get("username", user_field.value), 
                     res.get("friends", []), 
                     res.get("friendRequests", [])
                 )
             else:
-                show_snack(res.get("message"), RED)
-        except Exception as ex:
-            show_snack("Connection Error", RED)
+                show_snack(res.get("message", "Invalid login details"), RED)
+                
+        except requests.exceptions.RequestException:
+            show_snack("Couldn't reach server.", RED)
 
-    def show_snack(msg, color):
-        snack_text.value = msg
-        page.snack_bar.bgcolor = color
-        page.snack_bar.open = True
-        page.update()
-
-
-    # --- Chat UI Builder ---
+    # --- UI builder ---
     def build_chat_ui(current_username, initial_friends, initial_requests):
         page.clean()
         page.horizontal_alignment = ft.CrossAxisAlignment.START
         page.vertical_alignment = ft.MainAxisAlignment.START
 
-        # Vars
-        active_chat = [None]  
-        ws_connection = [None] 
-        
-        # Local memory to store history
-        local_chat_history = {friend: [] for friend in initial_friends}
+        app_state = {
+            "active_chat": None,
+            "ws_connection": None,
+            "local_chat_history": {friend: [] for friend in initial_friends}
+        }
 
-        # UI Containers
-        pending_requests_list = ft.Column(spacing=5)
-        user_list = ft.ListView(expand=True, spacing=10)
-        chat_display = ft.ListView(expand=True, spacing=10, auto_scroll=True)
-        chat_header = ft.Text("Select a friend to start chatting", size=20, color=RED_MAGENTA, weight="bold")
+        pending_requests_list = ft.Column(spacing=5, controls=[])
+        user_list = ft.ListView(expand=True, spacing=10, controls=[])
+        chat_display = ft.ListView(expand=True, spacing=10, auto_scroll=True, controls=[])
+        chat_header = ft.Text("select friend to chat", size=20, color=RED_MAGENTA, weight="bold")
 
-        # ---Func for the UI ---
-        def set_active_chat(friend_name):
-            active_chat[0] = friend_name
-            chat_header.value = f"Chatting with {friend_name}"
-            chat_display.controls.clear() # screen clear
-            
-            # does friend exist in memory?
-            if friend_name not in local_chat_history:
-                local_chat_history[friend_name] = []
-                
-            # Render memory
-            for msg in local_chat_history[friend_name]:
-                chat_display.controls.append(ft.Text(msg["text"], color=msg["color"]))
-                
+        def refresh_chat_display():
+            chat_display.controls.clear()
+            friend_name = app_state["active_chat"]
+            if friend_name and friend_name in app_state["local_chat_history"]:
+                for msg_data in app_state["local_chat_history"][friend_name]:
+                    chat_display.controls.append(ft.Text(msg_data["text"], color=msg_data["color"]))
             page.update()
 
+        def set_active_chat(friend_name):
+            app_state["active_chat"] = friend_name
+            chat_header.value = f"Chatting with {friend_name}"
+            refresh_chat_display()
+
         def add_friend_to_ui(friend_name):
-            if friend_name not in local_chat_history:
-                local_chat_history[friend_name] = []
+            if friend_name not in app_state["local_chat_history"]:
+                app_state["local_chat_history"][friend_name] = []
                 
             tile = ft.ListTile(
-                leading=ft.CircleAvatar(bgcolor=NEON_GREEN, content=ft.Icon(ft.Icons.PERSON, color="black")),
+                leading=ft.CircleAvatar(bgcolor=NEON_GREEN, content=ft.Icon(ft.Icons.PERSON, color=BLACK)),
                 title=ft.Text(friend_name, color=WHITE),
-                subtitle=ft.Text("Offline", color=ft.Colors.WHITE54, size=12),
-                on_click=lambda e: set_active_chat(friend_name) 
+                subtitle=ft.Text("Available", color=ft.Colors.WHITE54, size=12),
+                on_click=lambda e, name=friend_name: set_active_chat(name) 
             )
             user_list.controls.append(tile)
             page.update()
 
-        # render incoming friend requests
         def add_request_to_ui(requester):
-            row = ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-            def respond(e, action):
+            async def respond(e, action):
                 payload = {"requester": requester, "receiver": current_username, "action": action}
-                requests.post(f"{API_URL}/respond-friend-request", json=payload, headers={"ngrok-skip-browser-warning": "true"})
-                pending_requests_list.controls.remove(row)
-                if action == "accept":
-                    add_friend_to_ui(requester)
-                    show_snack(f"You are now friends with {requester}!", NEON_GREEN)
-                page.update()
+                res = requests.post(f"{API_URL}/respond-friend-request", json=payload)
+                if res.status_code == 200:
+                    pending_requests_list.controls.remove(request_row)
+                    if action == "accept":
+                        add_friend_to_ui(requester)
+                        show_snack(f"New friend: {requester}!", NEON_GREEN)
+                    page.update()
 
-            row.controls = [
-                ft.Text(requester, color=NEON_GREEN, size=14, weight="bold"),
-                ft.Row([
-                    ft.IconButton(ft.Icons.CHECK, icon_color=NEON_GREEN, on_click=lambda e: respond(e, "accept")),
-                    ft.IconButton(ft.Icons.CLOSE, icon_color=RED, on_click=lambda e: respond(e, "decline"))
-                ], spacing=0)
-            ]
-            pending_requests_list.controls.append(row)
+            request_row = ft.Row(
+                controls=[
+                    ft.Text(requester, color=NEON_GREEN, size=14, weight="bold"),
+                    ft.Row(
+                        controls=[
+                            ft.IconButton(ft.Icons.CHECK, icon_color=NEON_GREEN, on_click=lambda e: page.run_task(respond, e, "accept")),
+                            ft.IconButton(ft.Icons.CLOSE, icon_color=RED, on_click=lambda e: page.run_task(respond, e, "decline"))
+                        ], 
+                        spacing=0
+                    )
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+            )
+            pending_requests_list.controls.append(request_row)
             page.update()
 
-        # Load data from server
         for friend in initial_friends: add_friend_to_ui(friend)
         for req in initial_requests: add_request_to_ui(req)
 
-        # --- THE WEBSOCKET TASK ---
-        async def chat_websocket():
-            uri = f"{WS_URL}/{current_username}"
+        # --- CROSS-PLATFORM WEBSOCKET LOGIC ---
+        # coulnd't use websocket lib in web since "ssl" error so diff libs for web / desktop
+        def process_incoming_message(data):
             try:
-                async with websockets.connect(uri, additional_headers={"ngrok-skip-browser-warning": "true"}) as websocket: # ngrok header to prevent browser
-                    ws_connection[0] = websocket 
-                    while True:
-                        message = await websocket.recv()
-                        data = json.loads(message)
+                if isinstance(data, dict) and data.get("type") == "chat_message":
+                    sender = data.get("from", data.get("sender"))
+                    content = data.get("content")
+                    
+                    if sender not in app_state["local_chat_history"]:
+                        app_state["local_chat_history"][sender] = []
+                    
+                    app_state["local_chat_history"][sender].append({"text": f"{sender}: {content}", "color": WHITE})
+                    
+                    if app_state["active_chat"] == sender:
+                        chat_display.controls.append(ft.Text(f"{sender}: {content}", color=WHITE))
+                        page.update()
+                    else:
+                        show_snack(f"New message from {sender}", NEON_GREEN)
                         
-                        if data["type"] == "chat_message":
-                            sender = data["from"]
-                            msg_content = data["content"]
-                            
-                            if sender not in local_chat_history:
-                                local_chat_history[sender] = []
-                            
-                            # Save to local memory
-                            local_chat_history[sender].append({"text": f"{sender}: {msg_content}", "color": WHITE})
-                            
-                            # Update UI in active chat
-                            if active_chat[0] == sender:
-                                chat_display.controls.append(ft.Text(f"{sender}: {msg_content}", color=WHITE))
-                                page.update()
-                            else:
-                                show_snack(f"New message from {sender}!", NEON_GREEN)
-                                
-                        elif data["type"] == "friend_request":
-                            add_request_to_ui(data["from"])
-                            
-                        elif data["type"] == "friend_accepted":
-                            add_friend_to_ui(data["friend"])
-                            show_snack(f"{data['friend']} accepted your request!", NEON_GREEN)
-                            
-            except Exception as e:
-                print(f"WebSocket Error: {e}")
+                elif isinstance(data, dict) and data.get("type") == "friend_request":
+                    add_request_to_ui(data.get("requester"))
+                    
+                elif isinstance(data, dict) and data.get("type") == "friend_accepted":
+                    add_friend_to_ui(data.get("friend"))
+                    show_snack(f"{data.get('friend')} accepted your request!", NEON_GREEN)
+            except Exception as ex:
+                print(f"Message parse error: {ex}")
 
-        page.run_task(chat_websocket)
+        if IS_WEB:
+            # WEB MODE (Pyodide)
+            def on_ws_message(event):
+                process_incoming_message(json.loads(event.data))
+
+            def on_ws_disconnect(event):
+                show_snack("WebSocket Disconnected.", RED)
+                page.update()
+
+            ws = js.WebSocket.new(f"wss://{SERVER_DOMAIN}/ws/{current_username}")
+            ws.onmessage = create_proxy(on_ws_message)
+            ws.onclose = create_proxy(on_ws_disconnect)
+            
+            app_state["ws_connection"] = ws 
+        else:
+            # VSC / Desktop  (Standard Python connection)
+            async def desktop_ws():
+                WS_URL = f"wss://{SERVER_DOMAIN}/ws/{current_username}"
+                try:
+                    async with websockets.connect(WS_URL) as websocket:
+                        app_state["ws_connection"] = websocket 
+                        while True:
+                            msg_raw = await websocket.recv()
+                            process_incoming_message(json.loads(msg_raw))
+                except Exception as e:
+                    print(f"WS Connection Error: {e}")
+                    show_snack("Lost connection, restart required ig", RED)
+
+            page.run_task(desktop_ws)
 
         # --- Friend Search ---
-        friend_search_field = ft.TextField(label="Friend's Username", border_color=RED_MAGENTA, text_size=14, height=40)
+        friend_search_field = ft.TextField(label="Find User", border_color=RED_MAGENTA, height=45)
         def send_friend_request(e):
             target = friend_search_field.value
             if not target or target == current_username: return
-            res = requests.post(f"{API_URL}/friend-request", json={"from": current_username, "to": target}, headers={"ngrok-skip-browser-warning": "true"}).json()
+            res = requests.post(f"{API_URL}/friend-request", json={"from": current_username, "to": target}).json()
             if res.get("status") == "success":
-                show_snack(f"Request sent to {target}!", NEON_GREEN)
+                show_snack(f"Sent to {target}!", NEON_GREEN)
                 friend_search_field.value = ""
             else:
                 show_snack(res.get("message"), RED)
             page.update()
-        # send request button
-        add_friend_btn = ft.ElevatedButton("Send Request", on_click=send_friend_request, style=ft.ButtonStyle(color=WHITE, bgcolor=RED_MAGENTA))
 
-        # --- Left Panel ---
-        left_panel = ft.Container(
-            width=250, border=ft.border.only(right=ft.BorderSide(2, RED_MAGENTA)), padding=10, 
-            content=ft.Column([ft.Text("Friends", size=20, color=RED_MAGENTA, weight=ft.FontWeight.BOLD), user_list], expand=True) 
-        )
-
-        # --- Middle Panel - chat window ---
-        chat_input = ft.TextField(expand=True, hint_text="Type a message...", border_color=RED_MAGENTA)
+        # --- Chat Input handle ---
+        chat_input = ft.TextField(expand=True, hint_text="Message...", border_color=RED_MAGENTA, on_submit=lambda e: send_msg(e))
         
-        async def send_msg_async(payload):
-            if ws_connection[0]:
-                await ws_connection[0].send(json.dumps(payload))
-
         def send_msg(e):
-            if chat_input.value and active_chat[0]:
+            if chat_input.value and app_state["active_chat"]:
                 msg_text = chat_input.value
-                friend = active_chat[0]
+                friend = app_state["active_chat"]
                 
-                # Save to local memory
-                local_chat_history[friend].append({"text": f"You: {msg_text}", "color": NEON_GREEN})
-                
-                # Draw on UI
+                app_state["local_chat_history"][friend].append({"text": f"You: {msg_text}", "color": NEON_GREEN})
                 chat_display.controls.append(ft.Text(f"You: {msg_text}", color=NEON_GREEN))
                 
-                # Send to server via WebSocket
                 payload = {"type": "chat_message", "to": friend, "content": msg_text}
-                page.run_task(send_msg_async, payload)
+                
+                if IS_WEB:
+                    if app_state["ws_connection"]:
+                        app_state["ws_connection"].send(json.dumps(payload))
+                else:
+                    async def transmit():
+                        if app_state["ws_connection"]:
+                            await app_state["ws_connection"].send(json.dumps(payload))
+                    page.run_task(transmit)
                 
                 chat_input.value = ""
                 page.update()
-            elif not active_chat[0]:
-                show_snack("Select a friend to chat with first!", RED)
 
-        middle_panel = ft.Container(
-            expand=True, padding=20,
-            content=ft.Column([
-                chat_header,
-                ft.Container(content=chat_display, expand=True),
-                ft.Row([chat_input, ft.IconButton(icon=ft.Icons.SEND, icon_color=RED_MAGENTA, on_click=send_msg)])
-            ])
+        # --- Final Layout -prototype ---
+        page.add(
+            ft.ResponsiveRow(
+                controls=[
+                    ft.Container(
+                        col={"sm": 12, "md": 3},
+                        height=550,
+                        padding=10,
+                        border=ft.border.all(1, RED_MAGENTA),
+                        content=ft.Column(
+                            controls=[
+                                ft.Text("Friends List", color=WHITE, weight="bold"),
+                                user_list
+                            ]
+                        )
+                    ),
+                    ft.Container(
+                        col={"sm": 12, "md": 6},
+                        height=550,
+                        padding=10,
+                        border=ft.border.all(1, RED_MAGENTA),
+                        content=ft.Column(
+                            controls=[
+                                chat_header,
+                                chat_display,
+                                chat_input
+                            ]
+                        )
+                    ),
+                    ft.Container(
+                        col={"sm": 12, "md": 3},
+                        height=550,
+                        padding=10,
+                        border=ft.border.all(1, RED_MAGENTA),
+                        content=ft.Column(
+                            controls=[
+                                ft.Text("Add Friend", color=WHITE, weight="bold"),
+                                friend_search_field,
+                                ft.ElevatedButton("Send Request", on_click=send_friend_request, bgcolor=RED_MAGENTA, color=WHITE),
+                                ft.Divider(color=ft.Colors.WHITE24),
+                                ft.Text("Pending", color=WHITE, weight="bold"),
+                                pending_requests_list
+                            ], 
+                            scroll=ft.ScrollMode.AUTO
+                        )
+                    )
+                ], 
+                expand=True
+            )
         )
-
-        # --- Right Panel (Settings) ---
-        right_panel = ft.Container(
-            width=280, border=ft.border.only(left=ft.BorderSide(2, RED_MAGENTA)), padding=10, 
-            content=ft.Column([
-                ft.Text("Add Friend", size=16, color=WHITE),
-                friend_search_field, add_friend_btn,
-                ft.Divider(color=RED_MAGENTA),
-                ft.Text("Pending Requests", size=16, color=WHITE),
-                pending_requests_list 
-            ], scroll=ft.ScrollMode.AUTO)
-        )
-
-        page.add(ft.Row([left_panel, middle_panel, right_panel], expand=True, spacing=0))
         page.update()
 
-    # --- Login Layout ---
-    login_btn = ft.Button("Login", on_click=handle_login, style=ft.ButtonStyle(bgcolor=RED_MAGENTA, color="white"))
-    register_btn = ft.Button("Register", on_click=handle_register, style=ft.ButtonStyle(color=RED_MAGENTA))
+    # --- Login/register Screen ---
+    login_btn = ft.ElevatedButton("Login", on_click=handle_login, style=ft.ButtonStyle(bgcolor=RED_MAGENTA, color=WHITE))
+    register_btn = ft.TextButton("Register", on_click=handle_register, style=ft.ButtonStyle(color=RED_MAGENTA))
 
     login_card = ft.Container(
-        content=ft.Column([
-            ft.Container(content=status_icon, alignment=ft.Alignment.CENTER),
-            title,
-            email_field, user_field, pass_field,
-            ft.Row([login_btn, register_btn], alignment=ft.MainAxisAlignment.CENTER)
-        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-        bgcolor=BLACK, padding=40, border_radius=20, width=450,
+        content=ft.Column(
+            controls=[
+                status_icon,
+                title,
+                email_field,
+                user_field,
+                pass_field,
+                login_btn,
+                register_btn
+            ], 
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER
+        ),
+        bgcolor=BLACK, 
+        padding=40, 
+        border_radius=20, 
+        width=450,
         border=ft.border.all(2, RED_MAGENTA)
     )
 
