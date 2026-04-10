@@ -385,7 +385,7 @@ def main(page: ft.Page):
                         
                         if res.get("status") == "success":
                             for user in res["users"]:
-                                username = user["userName"]
+                                username = user["userName"] or user.get("username") or "Unknown"
                                 role = user.get("role", "user")
                                 status = user.get("status", "offline")
                                 
@@ -401,8 +401,8 @@ def main(page: ft.Page):
 
                                 user_row = ft.ListTile(
                                     leading=ft.Icon(ft.Icons.PERSON, color=NEON_GREEN if status == "online" else ft.Colors.GREY),
-                                    title=ft.Text(f"{username} ({role})", color=WHITE),
-                                    subtitle=ft.Text(user.get("email"), color=ft.Colors.WHITE54, size=12),
+                                    title=ft.Text(f"{username} ({role})", color=WHITE, no_wrap=True),
+                                    subtitle=ft.Text(user.get("email"), color=ft.Colors.WHITE54, size=12, no_wrap=True),
                                     trailing=op_button
                                 )
                                 all_users_list_ui.controls.append(user_row)
