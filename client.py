@@ -165,18 +165,37 @@ def main(page: ft.Page):
             chat_header.value = f"Chatting with {friend_name}"
             refresh_chat_display()
 
+        def check_active_user(friend_name):
+            payload = {"userName": friend_name}
+            try: 
+                response = requests.get(f"{API_URL}/user-status", params=payload, timeout=5)
+                try:
+                    res = response.json()
+                    if res.get("status") == "online":
+                        return "Online"
+                    else:                        
+                        return "Offline"
+                except ValueError:
+                    return "error"
+            except requests.exceptions.RequestException:
+                show_snack("Couldn't check user status.", RED)
+                return False
+            
         def add_friend_to_ui(friend_name):
             if friend_name not in app_state["local_chat_history"]:
                 app_state["local_chat_history"][friend_name] = []
-                
             tile = ft.ListTile(
                 leading=ft.CircleAvatar(bgcolor=NEON_GREEN, content=ft.Icon(ft.Icons.PERSON, color=BLACK)),
                 title=ft.Text(friend_name, color=WHITE),
-                subtitle=ft.Text("Available", color=ft.Colors.WHITE54, size=12),
+                subtitle=ft.Text(check_active_user(friend_name), color=ft.Colors.WHITE54, size=12),
                 on_click=lambda e, name=friend_name: set_active_chat(name) 
             )
             user_list.controls.append(tile)
             page.update()
+
+        
+            
+            
 
         def add_request_to_ui(requester):
             async def respond(e, action):
@@ -213,7 +232,7 @@ def main(page: ft.Page):
         def process_incoming_message(data):
             try:
                 if isinstance(data, dict) and data.get("type") == "chat_message":
-                    sender = data.get("from", data.get("sender"))
+                    sender = data.get("from") or data.get("sender")
                     content = data.get("content")
                     
                     if sender not in app_state["local_chat_history"]:
@@ -228,14 +247,33 @@ def main(page: ft.Page):
                         show_snack(f"New message from {sender}", NEON_GREEN)
                         
                 elif isinstance(data, dict) and data.get("type") == "friend_request":
-                    add_request_to_ui(data.get("requester"))
+                    requester_name = data.get("from") or data.get("requester")
+                    if requester_name:
+                        add_request_to_ui(requester_name)
+                        show_snack(f"New friend request from {requester_name}!", NEON_GREEN)
                     
                 elif isinstance(data, dict) and data.get("type") == "friend_accepted":
                     add_friend_to_ui(data.get("friend"))
                     show_snack(f"{data.get('friend')} accepted your request!", NEON_GREEN)
+                
+                # realtime status update between online/offline
+                elif isinstance(data, dict) and data.get("type") == "status_update":
+                    target_user = data.get("username")
+                    new_status = data.get("status") 
+                    
+                    if target_user:
+                        # loop trought users
+                        for tile in user_list.controls:
+                            # case insens match
+                            if tile.title.value.lower() == target_user.lower():
+                                tile.subtitle.value = new_status.capitalize()
+                                page.update()
+                                break
+
             except Exception as ex:
                 print(f"Message parse error: {ex}")
 
+                
         if IS_WEB:
             # WEB MODE (Pyodide)
             def on_ws_message(event):
