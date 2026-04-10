@@ -126,6 +126,7 @@ def main(page: ft.Page):
             if res.get("status") == "success":
                 build_chat_ui(
                     res.get("username", user_field.value), 
+                    res.get("role", "user"),
                     res.get("friends", []), 
                     res.get("friendRequests", [])
                 )
@@ -136,7 +137,7 @@ def main(page: ft.Page):
             show_snack("Couldn't reach server.", RED)
 
     # --- UI builder ---
-    def build_chat_ui(current_username, initial_friends, initial_requests):
+    def build_chat_ui(current_username, role, initial_friends, initial_requests):
         page.clean()
         page.horizontal_alignment = ft.CrossAxisAlignment.START
         page.vertical_alignment = ft.MainAxisAlignment.START
@@ -144,6 +145,7 @@ def main(page: ft.Page):
         app_state = {
             "active_chat": None,
             "ws_connection": None,
+            "role": role,
             "local_chat_history": {friend: [] for friend in initial_friends}
         }
 
@@ -192,10 +194,6 @@ def main(page: ft.Page):
             )
             user_list.controls.append(tile)
             page.update()
-
-        
-            
-            
 
         def add_request_to_ui(requester):
             async def respond(e, action):
@@ -319,10 +317,12 @@ def main(page: ft.Page):
 
         # --- Chat Input handle ---
         chat_input = ft.TextField(expand=True, hint_text="Message...", border_color=RED_MAGENTA, on_submit=lambda e: send_msg(e))
-        
+        send_btn = ft.IconButton(icon=ft.Icons.SEND, icon_color=NEON_GREEN, on_click=lambda e: send_msg(e))
+        chat_input_row = ft.Row(controls=[chat_input, send_btn])
+
         def send_msg(e):
-            if chat_input.value and app_state["active_chat"]:
-                msg_text = chat_input.value
+            if chat_input_row.value and app_state["active_chat"]:
+                msg_text = chat_input_row.value
                 friend = app_state["active_chat"]
                 
                 app_state["local_chat_history"][friend].append({"text": f"You: {msg_text}", "color": NEON_GREEN})
@@ -343,56 +343,187 @@ def main(page: ft.Page):
                 page.update()
 
         # --- Final Layout -prototype ---
+
+        # standart add friend view
+        add_friend_view = ft.Column(
+            controls=[
+                ft.Text("Add Friend", color=WHITE, weight="bold"),
+                friend_search_field,
+                ft.ElevatedButton("Send Request", on_click=send_friend_request, bgcolor=RED_MAGENTA, color=WHITE),
+                ft.Divider(color=ft.Colors.WHITE24),
+                ft.Text("Pending", color=WHITE, weight="bold"),
+                pending_requests_list
+            ], 
+            scroll=ft.ScrollMode.AUTO,
+            expand=True
+        )
+
+        # The Admin view 
+        all_users_list_ui = ft.ListView(expand=True, spacing=10, auto_scroll=True, controls=[], width=300)
+        admin_view = ft.Column(
+            controls=[
+                ft.Text("Database Users", color=RED, weight="bold", size=18),
+                all_users_list_ui,
+                ft.ElevatedButton("Back", on_click=lambda e: toggle_admin_view(False), bgcolor=DARK_GREY, color=WHITE)
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.START
+        )
+
+        # outside container to switch between user/admin mode
+        right_sidebar_content = ft.Container(content=add_friend_view, expand=True)
+
+        def toggle_admin_view(show_admin):
+                if show_admin:
+                    right_sidebar_content.content = admin_view
+                    all_users_list_ui.controls.clear()
+                    
+                    # Fetch all users frombackend
+                    try:
+                        res = requests.get(f"{API_URL}/all-users", params={"requester_role": app_state["role"]}).json()
+                        
+                        if res.get("status") == "success":
+                            for user in res["users"]:
+                                username = user["userName"]
+                                role = user.get("role", "user")
+                                status = user.get("status", "offline")
+                                
+                                # won't show OP button to admin users
+                                op_button = ft.Container()
+                                if role != "admin":
+                                    op_button = ft.IconButton(
+                                        icon=ft.Icons.STAR, 
+                                        icon_color=ft.Colors.AMBER, 
+                                        tooltip="OP this user",
+                                        on_click=lambda e, target=username: promote_to_admin(target)
+                                    )
+
+                                user_row = ft.ListTile(
+                                    leading=ft.Icon(ft.Icons.PERSON, color=NEON_GREEN if status == "online" else ft.Colors.GREY),
+                                    title=ft.Text(f"{username} ({role})", color=WHITE),
+                                    subtitle=ft.Text(user.get("email"), color=ft.Colors.WHITE54, size=12),
+                                    trailing=op_button
+                                )
+                                all_users_list_ui.controls.append(user_row)
+                                
+                    except Exception as e:
+                        show_snack("Failed to load users", RED)
+                        
+                else:
+                    right_sidebar_content.content = add_friend_view
+                
+                page.update()
+
+        # triggered by star button
+        def promote_to_admin(target_username):
+            payload = {"requester": current_username, "target": target_username}
+            try:
+                res = requests.post(f"{API_URL}/promote", json=payload).json()
+                if res.get("status") == "success":
+                    show_snack(res.get("message"), NEON_GREEN)
+                    # Refresh
+                    toggle_admin_view(True) 
+                else:
+                    show_snack(res.get("message"), RED)
+            except Exception as e:
+                show_snack("Failed to connect to server", RED)
+
+        # switch
+        if app_state.get("role") == "admin":
+            add_friend_view.controls.insert(0, ft.ElevatedButton(
+                "show all users", 
+                bgcolor=RED, 
+                color=WHITE, 
+                on_click=lambda e: toggle_admin_view(True)
+            ))
+        
+        # Desktop UI 
+        left_column = ft.Container(
+            col={"xs": 12, "md": 3, "lg": 2, "xl": 2},
+            expand=True,
+            padding=10,
+            border=ft.border.all(1, RED_MAGENTA),
+            content=ft.Column([ft.Text("Friends List", color=WHITE, weight="bold"), user_list])
+        )
+
+        center_column = ft.Container(
+            col={"xs": 12, "md": 6, "lg": 7, "xl": 8},
+            expand=True,
+            padding=10,
+            border=ft.border.all(1, RED_MAGENTA),
+            content=ft.Column([chat_header, chat_display, chat_input_row]) 
+        )
+
+        right_column = ft.Container(
+            col={"xs": 12, "md": 3, "lg": 3, "xl": 2},
+            width=320,
+            expand=True,
+            padding=10,
+            border=ft.border.all(1, RED_MAGENTA),
+            content=right_sidebar_content 
+        )
+
+        # --- Mobile UI ---
+        mobile_drawer = ft.NavigationDrawer(
+            controls=[
+                ft.Container(padding=20, content=ft.Text("Friends List", color=RED_MAGENTA, size=20, weight="bold")),
+            ],
+            bgcolor=DARK_GREY
+        )
+        page.drawer = mobile_drawer
+
+        mobile_appbar = ft.AppBar(
+            leading=ft.IconButton(ft.Icons.MENU, icon_color=NEON_GREEN, on_click=lambda e: page.open(mobile_drawer)),
+            title=ft.Text("Andhyy Chat", color=WHITE, weight="bold"),
+            bgcolor=BLACK,
+            actions=[
+                ft.IconButton(ft.Icons.PERSON_ADD, icon_color=RED_MAGENTA, on_click=lambda e: page.open(
+                    # wrap so flet doesn't cry
+                    ft.BottomSheet(ft.Container(padding=20, bgcolor=DARK_GREY, content=ft.Column([
+                        ft.Text("Swipe down to close", color=ft.Colors.WHITE54),
+                        right_sidebar_content
+                    ])))
+                ))
+            ]
+        )
+
+        # ---Responsive Resize Handler ---
+        def handle_resize(e):
+            is_mobile = page.width < 800 
+            
+            #hide desktop sidebars
+            left_column.visible = not is_mobile
+            right_column.visible = not is_mobile
+            
+            # Prevent Flet Crash - moved user list
+            if is_mobile:
+                if user_list in left_column.content.controls:
+                    left_column.content.controls.remove(user_list)
+                if user_list not in mobile_drawer.controls:
+                    mobile_drawer.controls.append(user_list)
+            else:
+                if user_list in mobile_drawer.controls:
+                    mobile_drawer.controls.remove(user_list)
+                if user_list not in left_column.content.controls:
+                    left_column.content.controls.append(user_list)
+            
+            # only show it on mobile
+            page.appbar = mobile_appbar if is_mobile else None
+            page.update()
+
+        page.on_resize = handle_resize
+
+        # ---Add to Page ---
         page.add(
             ft.ResponsiveRow(
-                controls=[
-                    ft.Container(
-                        col={"sm": 12, "md": 3},
-                        height=550,
-                        padding=10,
-                        border=ft.border.all(1, RED_MAGENTA),
-                        content=ft.Column(
-                            controls=[
-                                ft.Text("Friends List", color=WHITE, weight="bold"),
-                                user_list
-                            ]
-                        )
-                    ),
-                    ft.Container(
-                        col={"sm": 12, "md": 6},
-                        height=550,
-                        padding=10,
-                        border=ft.border.all(1, RED_MAGENTA),
-                        content=ft.Column(
-                            controls=[
-                                chat_header,
-                                chat_display,
-                                chat_input
-                            ]
-                        )
-                    ),
-                    ft.Container(
-                        col={"sm": 12, "md": 3},
-                        height=550,
-                        padding=10,
-                        border=ft.border.all(1, RED_MAGENTA),
-                        content=ft.Column(
-                            controls=[
-                                ft.Text("Add Friend", color=WHITE, weight="bold"),
-                                friend_search_field,
-                                ft.ElevatedButton("Send Request", on_click=send_friend_request, bgcolor=RED_MAGENTA, color=WHITE),
-                                ft.Divider(color=ft.Colors.WHITE24),
-                                ft.Text("Pending", color=WHITE, weight="bold"),
-                                pending_requests_list
-                            ], 
-                            scroll=ft.ScrollMode.AUTO
-                        )
-                    )
-                ], 
+                controls=[left_column, center_column, right_column], 
                 expand=True
             )
         )
-        page.update()
+        
+        # resize trigger 
+        handle_resize(None)
 
     # --- Login/register Screen ---
     login_btn = ft.ElevatedButton("Login", on_click=handle_login, style=ft.ButtonStyle(bgcolor=RED_MAGENTA, color=WHITE))
