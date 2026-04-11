@@ -1,4 +1,5 @@
 flet 
+flet_audio
 requests 
 pyodide-http
 websockets

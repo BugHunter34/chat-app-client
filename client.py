@@ -1,7 +1,10 @@
 import flet as ft
+import flet_audio as fta
 import requests
 import asyncio
 import json
+import time
+
 
 # --- Cross Platform ---
 try:
@@ -74,6 +77,16 @@ def main(page: ft.Page):
     page.window.height = 800
     page.theme_mode = ft.ThemeMode.DARK 
     page.padding = 0
+
+    # mp3 notifs paths
+    WB_sound = fta.Audio(src=f"{API_URL}/sounds/welcome.mp3", autoplay=False)
+    ping_sound = fta.Audio(src=f"{API_URL}/sounds/notif.mp3", autoplay=False)
+    error_sound = fta.Audio(src=f"{API_URL}/sounds/error.mp3", autoplay=False)
+
+    # the sound notif
+    page.services.append(ping_sound)
+    page.services.append(error_sound)
+    page.services.append(WB_sound)
 
     # --- UI for login ---
     status_icon = ft.Icon(icon=ft.Icons.WIFI_OFF, size=50, color=RED)
@@ -195,10 +208,11 @@ def main(page: ft.Page):
             "role": role,
             "local_chat_history": {friend: [] for friend in initial_friends}
         }
-
+        app_state["last_typing_time"] = 0
         pending_requests_list = ft.Column(spacing=5, controls=[])
         user_list = ft.ListView(expand=True, spacing=10, controls=[])
         chat_display = ft.ListView(expand=True, spacing=10, auto_scroll=True, controls=[])
+        typing_indicator = ft.Text("", color=ft.Colors.WHITE54, size=12, italic=True)
         chat_header = ft.Text("select friend to chat", size=20, color=RED_MAGENTA, weight="bold")
 
         def refresh_chat_display():
@@ -224,7 +238,13 @@ def main(page: ft.Page):
         def set_active_chat(friend_name):
             app_state["active_chat"] = friend_name
             chat_header.value = f"Chatting with {friend_name}"
-            
+
+            # remove notif when clicked on user
+            for tile in user_list.controls:
+                if tile.title.value == friend_name:
+                    tile.trailing.visible = False
+                    page.update()
+                    break
             # Fetch history from DB
             try:
                 res = requests.get(f"{API_URL}/messages", params={"user1": current_username, "user2": friend_name}).json()
@@ -262,10 +282,21 @@ def main(page: ft.Page):
         def add_friend_to_ui(friend_name):
             if friend_name not in app_state["local_chat_history"]:
                 app_state["local_chat_history"][friend_name] = []
+            
+            notification_badge = ft.Container(
+                content=ft.Text("New", size=10, color=WHITE, weight="bold"),
+                bgcolor=RED,
+                padding=ft.padding.only(left=6, right=6, top=2, bottom=2),
+                border_radius=10,
+                visible=False # hide by deafult
+                
+            )
+
             tile = ft.ListTile(
                 leading=ft.CircleAvatar(bgcolor=NEON_GREEN, content=ft.Icon(ft.Icons.PERSON, color=BLACK)),
                 title=ft.Text(friend_name, color=WHITE),
                 subtitle=ft.Text(check_active_user(friend_name), color=ft.Colors.WHITE54, size=12),
+                trailing=notification_badge, #notif
                 on_click=lambda e, name=friend_name: set_active_chat(name) 
             )
             user_list.controls.append(tile)
@@ -280,6 +311,7 @@ def main(page: ft.Page):
                     if action == "accept":
                         add_friend_to_ui(requester)
                         show_snack(f"New friend: {requester}!", NEON_GREEN)
+                        ping_sound.play()
                     page.update()
 
             request_row = ft.Row(
@@ -314,7 +346,9 @@ def main(page: ft.Page):
                     
                     # save raw
                     app_state["local_chat_history"][sender].append({"sender": sender, "content": content})
-                    
+
+                    # play notif mp3
+                    ping_sound.play()
                     if app_state["active_chat"] == sender:
                         # draw emoji/text 
                         bubble = parse_message_to_ui(sender, content, WHITE)
@@ -322,7 +356,27 @@ def main(page: ft.Page):
                         page.update()
                     else:
                         show_snack(f"New message from {sender}", NEON_GREEN)
+                        # show notif
+                        for tile in user_list.controls:
+                            if tile.title.value == sender:
+                                tile.trailing.visible = True
+                                page.update()
+                                break
+
+                # typing indicator
+                elif isinstance(data, dict) and data.get("type") == "typing":
+                    sender = data.get("from")
+                    if app_state["active_chat"] == sender:
+                        typing_indicator.value = f"{sender} is typing..."
+                        page.update()
                         
+                        # clear after 3s
+                        async def clear_typing():
+                            await asyncio.sleep(3)
+                            typing_indicator.value = ""
+                            page.update()
+                        page.run_task(clear_typing)
+
                 elif isinstance(data, dict) and data.get("type") == "friend_request":
                     requester_name = data.get("from") or data.get("requester")
                     if requester_name:
@@ -436,9 +490,24 @@ def main(page: ft.Page):
                         show_snack(res.get("message"), RED)
                 except Exception as ex:
                     show_snack(f"Failed to upload image: {ex}", RED)
+        
 
+        def handle_typing_change(e):
+            # Only send a ping every 2 seconds
+            if time.time() - app_state["last_typing_time"] > 2 and app_state["active_chat"]:
+                app_state["last_typing_time"] = time.time()
+                
+                payload = {"type": "typing", "to": app_state["active_chat"], "from": current_username}
+                if IS_WEB:
+                    if app_state["ws_connection"]:
+                        app_state["ws_connection"].send(json.dumps(payload))
+                else:
+                    async def transmit():
+                        if app_state["ws_connection"]:
+                            await app_state["ws_connection"].send(json.dumps(payload))
+                    page.run_task(transmit)
         # --- Update Chat Input---
-        chat_input = ft.TextField(expand=True, hint_text="Message...", border_color=RED_MAGENTA, on_submit=lambda e: send_msg(e))
+        chat_input = ft.TextField(expand=True, hint_text="Message...", border_color=RED_MAGENTA, on_submit=lambda e: send_msg(e),on_change=handle_typing_change)
         send_btn = ft.IconButton(icon=ft.Icons.SEND, icon_color=NEON_GREEN, on_click=lambda e: send_msg(e))
         attach_btn = ft.IconButton(icon=ft.Icons.IMAGE, icon_color=WHITE, on_click=on_image_picked)
         chat_input_row = ft.Row(controls=[attach_btn, chat_input, send_btn])
@@ -709,11 +778,37 @@ def main(page: ft.Page):
             try:
                 res = requests.get(f"{API_URL}/verify-token", params={"token": saved_token}, timeout=5).json()
                 if res.get("status") == "success":
-                    build_chat_ui(
-                        res.get("username"), 
-                        res.get("role", "user"), 
-                        res.get("friends", []), 
-                        res.get("friendRequests", [])
+                    # this will unlock audio on web since browser can't play mp3 until user interacts with the app
+                    def unlock_audio_and_enter(e):
+                        # play nothing - just so it can work
+                        WB_sound.play()
+
+                        # Build the UI
+                        build_chat_ui(
+                            res.get("username"), 
+                            res.get("role", "user"), 
+                            res.get("friends", []), 
+                            res.get("friendRequests", [])
+                        )
+
+                    # WB screen
+                    page.clean()
+                    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+                    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+                    page.add(
+                        ft.Column(
+                            controls=[
+                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=NEON_GREEN, size=60),
+                                ft.Text(f"Welcome back, {res.get('username')}!", size=24, color=WHITE, weight="bold"),
+                                ft.ElevatedButton(
+                                    "Enter Chat", 
+                                    bgcolor=RED_MAGENTA, 
+                                    color=WHITE, 
+                                    on_click=unlock_audio_and_enter # unlock
+                                )
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER
+                        )
                     )
                     return # exit
             except Exception:
