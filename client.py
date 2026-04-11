@@ -37,6 +37,12 @@ def parse_message_to_ui(prefix_text, message_content, text_color):
    split messages into text/emoji 
     """
     ui_controls = [ft.Text(f"{prefix_text}: ", color=text_color, weight="bold")]
+
+    # if it starts with IMG it will render bigger instead of text/emoji
+    if message_content.startswith("[IMG]"):
+        img_url = message_content.replace("[IMG]", "").strip() 
+        ui_controls.append(ft.Image(src=img_url, width=250, height=250, border_radius=10, fit=ft.BoxFit.CONTAIN))
+        return ft.Row(controls=ui_controls, vertical_alignment=ft.CrossAxisAlignment.START)
     
     # split to check for codes
     words = message_content.split()
@@ -117,7 +123,7 @@ def main(page: ft.Page):
     # --- Handlers ---
     # erorr popup
     def show_snack(msg, color):
-        snack = ft.SnackBar(content=ft.Text(msg, color=BLACK, bold=True), bgcolor=color)
+        snack = ft.SnackBar(content=ft.Text(msg, color=BLACK, weight="bold"), bgcolor=color)
         page.overlay.append(snack)
         snack.open = True
         page.update()
@@ -388,10 +394,55 @@ def main(page: ft.Page):
                 show_snack(res.get("message"), RED)
             page.update()
 
-        # --- Chat Input handle ---
+        # --- File Uploader---
+        async def on_image_picked(e):
+            # call the service
+            files = await ft.FilePicker().pick_files(allow_multiple=False)
+            
+            # picked and confirmed
+            if files and app_state["active_chat"]:
+                friend = app_state["active_chat"]
+                filepath = files[0].path
+                
+                show_snack("Uploading image...", ft.Colors.BLUE)
+                
+                try:
+                    # Upload to FastAPI
+                    with open(filepath, "rb") as f:
+                        res = requests.post(f"{API_URL}/upload", files={"file": f}).json()
+                    
+                    if res.get("status") == "success":
+                        img_url = res["url"]
+                        msg_text = f"[IMG]{img_url}"
+                        
+                        # Save to history and render
+                        app_state["local_chat_history"][friend].append({"sender": current_username, "content": msg_text})
+                        bubble = parse_message_to_ui("You", msg_text, NEON_GREEN)
+                        chat_display.controls.append(bubble)
+                        page.update()
+                        
+                        # Broadcast via WebSocket
+                        payload = {"type": "chat_message", "to": friend, "content": msg_text}
+                        if IS_WEB:
+                            if app_state["ws_connection"]:
+                                app_state["ws_connection"].send(json.dumps(payload))
+                        else:
+                            async def transmit():
+                                if app_state["ws_connection"]:
+                                    await app_state["ws_connection"].send(json.dumps(payload))
+                            page.run_task(transmit)
+                            
+                    else:
+                        show_snack(res.get("message"), RED)
+                except Exception as ex:
+                    show_snack(f"Failed to upload image: {ex}", RED)
+
+        # --- Update Chat Input---
         chat_input = ft.TextField(expand=True, hint_text="Message...", border_color=RED_MAGENTA, on_submit=lambda e: send_msg(e))
         send_btn = ft.IconButton(icon=ft.Icons.SEND, icon_color=NEON_GREEN, on_click=lambda e: send_msg(e))
-        chat_input_row = ft.Row(controls=[chat_input, send_btn])
+        attach_btn = ft.IconButton(icon=ft.Icons.IMAGE, icon_color=WHITE, on_click=on_image_picked)
+        chat_input_row = ft.Row(controls=[attach_btn, chat_input, send_btn])
+
 
         def send_msg(e):
             if chat_input.value and app_state["active_chat"]:
