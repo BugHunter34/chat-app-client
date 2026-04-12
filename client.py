@@ -80,13 +80,27 @@ def main(page: ft.Page):
 
     # mp3 notifs paths
     WB_sound = fta.Audio(src=f"{API_URL}/sounds/welcome.mp3", autoplay=False)
-    ping_sound = fta.Audio(src=f"{API_URL}/sounds/notif.mp3", autoplay=False)
+    ping_sound = fta.Audio(src=f"{API_URL}/sounds/notif.mp3", volume=300.0, autoplay=False)
     error_sound = fta.Audio(src=f"{API_URL}/sounds/error.mp3", autoplay=False)
 
-    # the sound notif
+    def handle_notif_sound():
+        show_snack("playing", NEON_GREEN)
+        try:
+            ping_sound.seek(0) # reset audio to start
+            page.run_task(ping_sound.play)  
+            page.run_task(ping_sound.play)  # played twice since it doesn't want to play for the first time
+            show_snack("played", NEON_GREEN)
+        except Exception as e:
+            show_snack(f"Failed to play sound: {e}", RED)
+            ping_sound.seek(0)
+            page.run_task(error_sound.play)
+            page.run_task(error_sound.play)
+
+    # the sound notifs
     page.services.append(ping_sound)
     page.services.append(error_sound)
     page.services.append(WB_sound)
+    page.update()
 
     # --- UI for login ---
     status_icon = ft.Icon(icon=ft.Icons.WIFI_OFF, size=50, color=RED)
@@ -340,51 +354,57 @@ def main(page: ft.Page):
                 if isinstance(data, dict) and data.get("type") == "chat_message":
                     sender = data.get("from") or data.get("sender")
                     content = data.get("content")
-                    
+
+
                     if sender not in app_state["local_chat_history"]:
                         app_state["local_chat_history"][sender] = []
                     
                     # save raw
                     app_state["local_chat_history"][sender].append({"sender": sender, "content": content})
 
-                    # play notif mp3
-                    ping_sound.play()
+
                     if app_state["active_chat"] == sender:
                         # draw emoji/text 
                         bubble = parse_message_to_ui(sender, content, WHITE)
                         chat_display.controls.append(bubble)
-                        page.update()
+                        chat_display.update()
                     else:
+                        handle_notif_sound()
                         show_snack(f"New message from {sender}", NEON_GREEN)
+                        
                         # show notif
                         for tile in user_list.controls:
                             if tile.title.value == sender:
                                 tile.trailing.visible = True
-                                page.update()
+                                tile.update()
                                 break
+                        
+                        
 
                 # typing indicator
                 elif isinstance(data, dict) and data.get("type") == "typing":
                     sender = data.get("from")
                     if app_state["active_chat"] == sender:
                         typing_indicator.value = f"{sender} is typing..."
-                        page.update()
+                        typing_indicator.update()
                         
                         # clear after 3s
                         async def clear_typing():
                             await asyncio.sleep(3)
                             typing_indicator.value = ""
-                            page.update()
+                            typing_indicator.update()
                         page.run_task(clear_typing)
 
                 elif isinstance(data, dict) and data.get("type") == "friend_request":
                     requester_name = data.get("from") or data.get("requester")
                     if requester_name:
                         add_request_to_ui(requester_name)
+                        handle_notif_sound()
                         show_snack(f"New friend request from {requester_name}!", NEON_GREEN)
                     
                 elif isinstance(data, dict) and data.get("type") == "friend_accepted":
                     add_friend_to_ui(data.get("friend"))
+                    handle_notif_sound()
                     show_snack(f"{data.get('friend')} accepted your request!", NEON_GREEN)
                 
                 # realtime status update between online/offline
@@ -398,7 +418,7 @@ def main(page: ft.Page):
                             # case insens match
                             if tile.title.value.lower() == target_user.lower():
                                 tile.subtitle.value = new_status.capitalize()
-                                page.update()
+                                tile.update()
                                 break
 
             except Exception as ex:
@@ -407,7 +427,7 @@ def main(page: ft.Page):
                 
         if IS_WEB:
             # WEB MODE (Pyodide)
-            def on_ws_message(event):
+            async def on_ws_message(event):
                 process_incoming_message(json.loads(event.data))
 
             def on_ws_disconnect(event):
