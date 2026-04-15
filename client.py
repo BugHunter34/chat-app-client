@@ -77,6 +77,7 @@ def main(page: ft.Page):
     page.window.height = 800
     page.theme_mode = ft.ThemeMode.DARK 
     page.padding = 0
+    app_state = {}
 
     # mp3 notifs paths
     WB_sound = fta.Audio(src=f"{API_URL}/sounds/welcome.mp3", autoplay=False)
@@ -193,9 +194,11 @@ def main(page: ft.Page):
 
             if res.get("status") == "success":
                 # save token if accepted cookies
+                page.session.store.set("token", res.get("token"))
                 async def save_token():
                     if await prefs.get("cookies_accepted"):
                         await prefs.set("auth_token", res.get("token"))
+
                 page.run_task(save_token)
 
                 build_chat_ui(
@@ -253,6 +256,11 @@ def main(page: ft.Page):
             app_state["active_chat"] = friend_name
             chat_header.value = f"Chatting with {friend_name}"
 
+            current_token = page.session.store.get("token")
+            if not current_token:
+                show_snack("Error: Missing auth token", RED)
+                return
+            
             # remove notif when clicked on user
             for tile in user_list.controls:
                 if tile.title.value == friend_name:
@@ -260,8 +268,10 @@ def main(page: ft.Page):
                     page.update()
                     break
             # Fetch history from DB
+            # --auth--
+            headerss = {"Authorization": f"Bearer {current_token}"}
             try:
-                res = requests.get(f"{API_URL}/messages", params={"user1": current_username, "user2": friend_name}).json()
+                res = requests.get(f"{API_URL}/messages", params={"user1": current_username, "user2": friend_name}, headers=headerss).json()
                 if res.get("status") == "success":
                     # clear so it doesnt duplicate
                     app_state["local_chat_history"][friend_name] = []
@@ -273,7 +283,7 @@ def main(page: ft.Page):
                             "content": msg["content"]
                         })
             except Exception as e:
-                show_snack("Couldn't load chat history", RED)
+                show_snack(f"Couldn't load chat history: {e}", RED)
 
             refresh_chat_display()
 
@@ -433,16 +443,17 @@ def main(page: ft.Page):
             def on_ws_disconnect(event):
                 show_snack("WebSocket Disconnected.", RED)
                 page.update()
-
-            ws = js.WebSocket.new(f"wss://{SERVER_DOMAIN}/ws/{current_username}")
+            current_token = page.session.store.get("token")
+            ws = js.WebSocket.new(f"wss://{SERVER_DOMAIN}/ws/{current_username}?token={current_token}")
             ws.onmessage = create_proxy(on_ws_message)
             ws.onclose = create_proxy(on_ws_disconnect)
             
             app_state["ws_connection"] = ws 
         else:
             # VSC / Desktop  (Standard Python connection)
+            current_token = page.session.store.get("token")
             async def desktop_ws():
-                WS_URL = f"wss://{SERVER_DOMAIN}/ws/{current_username}"
+                WS_URL = f"wss://{SERVER_DOMAIN}/ws/{current_username}?token={current_token}"
                 try:
                     async with websockets.connect(WS_URL) as websocket:
                         app_state["ws_connection"] = websocket 
@@ -460,7 +471,9 @@ def main(page: ft.Page):
         def send_friend_request(e):
             target = friend_search_field.value
             if not target or target == current_username: return
-            res = requests.post(f"{API_URL}/friend-request", json={"from": current_username, "to": target}).json()
+            current_token = page.session.store.get("token")
+            headerss = {"Authorization": f"Bearer {current_token}"}
+            res = requests.post(f"{API_URL}/friend-request", json={"from": current_username, "to": target}, headers=headerss).json()
             if res.get("status") == "success":
                 show_snack(f"Sent to {target}!", NEON_GREEN)
                 friend_search_field.value = ""
@@ -593,8 +606,10 @@ def main(page: ft.Page):
                     all_users_list_ui.controls.clear()
                     
                     # Fetch all users frombackend
+                    current_token = page.session.store.get("token")
+                    headerss = {"Authorization": f"Bearer {current_token}"}
                     try:
-                        res = requests.get(f"{API_URL}/all-users", params={"requester_role": app_state["role"]}).json()
+                        res = requests.get(f"{API_URL}/all-users", params={"requester_role": app_state["role"]}, headers=headerss).json()
                         
                         if res.get("status") == "success":
                             for user in res["users"]:
@@ -621,7 +636,7 @@ def main(page: ft.Page):
                                 all_users_list_ui.controls.append(user_row)
                                 
                     except Exception as e:
-                        show_snack("Failed to load users", RED)
+                        show_snack(f"Failed to load users: {e}", RED)
                         
                 else:
                     right_sidebar_content.content = add_friend_view
@@ -631,8 +646,10 @@ def main(page: ft.Page):
         # triggered by star button
         def promote_to_admin(target_username):
             payload = {"requester": current_username, "target": target_username}
+            current_token = page.session.store.get("token")
+            headerss = {"Authorization": f"Bearer {current_token}"}
             try:
-                res = requests.post(f"{API_URL}/promote", json=payload).json()
+                res = requests.post(f"{API_URL}/promote", json=payload, headers=headerss).json()
                 if res.get("status") == "success":
                     show_snack(res.get("message"), NEON_GREEN)
                     # Refresh
@@ -640,7 +657,7 @@ def main(page: ft.Page):
                 else:
                     show_snack(res.get("message"), RED)
             except Exception as e:
-                show_snack("Failed to connect to server", RED)
+                show_snack(f"Failed to connect to server: {e}", RED)
 
         # switch
         if app_state.get("role") == "admin":
@@ -798,6 +815,8 @@ def main(page: ft.Page):
             try:
                 res = requests.get(f"{API_URL}/verify-token", params={"token": saved_token}, timeout=5).json()
                 if res.get("status") == "success":
+                    page.session.store.set("token", saved_token)
+                    
                     # this will unlock audio on web since browser can't play mp3 until user interacts with the app
                     def unlock_audio_and_enter(e):
                         # play nothing - just so it can work
