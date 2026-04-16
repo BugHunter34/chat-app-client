@@ -77,7 +77,7 @@ def main(page: ft.Page):
     page.window.height = 800
     page.theme_mode = ft.ThemeMode.DARK 
     page.padding = 0
-    app_state = {}
+    
 
     # mp3 notifs paths
     WB_sound = fta.Audio(src=f"{API_URL}/sounds/welcome.mp3", autoplay=False)
@@ -481,49 +481,56 @@ def main(page: ft.Page):
                 show_snack(res.get("message"), RED)
             page.update()
 
-        # --- File Uploader---
+        # --- File Uploader ---
         async def on_image_picked(e):
-            # call the service
-            files = await ft.FilePicker().pick_files(allow_multiple=False)
+            file_picker = ft.FilePicker()
+            files = await file_picker.pick_files(allow_multiple=False)
+            if not files or not app_state.get("active_chat"):
+                return
+                
+            f = files[0] 
+            friend = app_state["active_chat"]
             
-            # picked and confirmed
-            if files and app_state["active_chat"]:
-                friend = app_state["active_chat"]
-                filepath = files[0].path
-                
-                show_snack("Uploading image...", ft.Colors.BLUE)
-                
+            show_snack("Uploading image...", NEON_GREEN) 
+
+            if IS_WEB:
                 try:
-                    # Upload to FastAPI
-                    with open(filepath, "rb") as f:
-                        res = requests.post(f"{API_URL}/upload", files={"file": f}).json()
+                    upload_list = [
+                        ft.FilePickerUploadFile(
+                            name=f.name,
+                            upload_url=f"{API_URL}/upload?sender={current_username}&receiver={friend}",
+                            method="POST"
+                        )
+                    ]
+                    await file_picker.upload(upload_list) 
+                except Exception as ex:
+                    show_snack(f"Web upload failed: {ex}", ft.colors.RED)
+
+            else:
+                try:
+                    with open(f.path, "rb") as file_data:
+                        res = requests.post(f"{API_URL}/upload", files={"file": file_data}).json()
                     
                     if res.get("status") == "success":
-                        img_url = res["url"]
+                        img_url = res["url"] 
                         msg_text = f"[IMG]{img_url}"
                         
-                        # Save to history and render
+                        # save to cache
                         app_state["local_chat_history"][friend].append({"sender": current_username, "content": msg_text})
-                        bubble = parse_message_to_ui("You", msg_text, NEON_GREEN)
+                        
+                        bubble = parse_message_to_ui("You", msg_text, NEON_GREEN) 
                         chat_display.controls.append(bubble)
                         page.update()
-                        
-                        # Broadcast via WebSocket
+
                         payload = {"type": "chat_message", "to": friend, "content": msg_text}
-                        if IS_WEB:
-                            if app_state["ws_connection"]:
-                                app_state["ws_connection"].send(json.dumps(payload))
-                        else:
-                            async def transmit():
-                                if app_state["ws_connection"]:
-                                    await app_state["ws_connection"].send(json.dumps(payload))
-                            page.run_task(transmit)
-                            
+                        if app_state.get("ws_connection"):
+                            await app_state["ws_connection"].send(json.dumps(payload))
+                        
                     else:
-                        show_snack(res.get("message"), RED)
+                        show_snack(res.get("message"), ft.colors.RED)
+                        
                 except Exception as ex:
-                    show_snack(f"Failed to upload image: {ex}", RED)
-        
+                    show_snack(f"Failed to upload image: {ex}", ft.colors.RED)
 
         def handle_typing_change(e):
             # Only send a ping every 2 seconds
