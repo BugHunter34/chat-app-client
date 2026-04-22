@@ -404,19 +404,22 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
 
     def check_active_user(friend_name):
         payload = {"userName": friend_name}
+        default_avatar = f"{API_URL}/avatars/default-avatar.png"
+
         try: 
             response = requests.get(f"{API_URL}/user-status", params=payload, timeout=5)
             try:
                 res = response.json()
-                if res.get("status") == "online":
-                    return "Online"
-                else:                        
-                    return "Offline"
+                status_text = "Online" if res.get("status") == "online" else "Offline"
+                avatar_url = res.get("avatarUrl", default_avatar)
+                return status_text, avatar_url
+            
             except ValueError:
-                return "error"
+                return "error", default_avatar
+            
         except requests.exceptions.RequestException:
             show_snack(page, "Couldn't check user status.", RED)
-            return False
+            return False, default_avatar
         
     def add_friend_to_ui(friend_name):
         if not friend_name or friend_name == "None":
@@ -437,6 +440,8 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
             border_radius=10,
             visible=False # hide by default
         )
+        # values for users
+        friend_status_text, friend_avatar_url = check_active_user(friend_name)
 
         if live_username and friend_name.lower() == live_username.lower() and my_avatar:
             # Render uploaded img
@@ -448,13 +453,13 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
                 border_radius=20
             )
         else:
-            # placeholder for others
-            leading_avatar = ft.CircleAvatar(bgcolor=NEON_GREEN, content=ft.Icon(ft.Icons.PERSON, color=BLACK))
+            leading_avatar = ft.Image(
+                src=friend_avatar_url, width=40, height=40, fit=ft.BoxFit.COVER, border_radius=20)
 
         tile = ft.ListTile(
             leading=leading_avatar,
             title=ft.Text(friend_name, color=WHITE),
-            subtitle=ft.Text(check_active_user(friend_name), color=ft.Colors.WHITE54, size=12),
+            subtitle=ft.Text(friend_status_text, color=ft.Colors.WHITE54, size=12),
             trailing=notification_badge, #notif
             on_click=lambda e, name=friend_name: set_active_chat(name) 
         )
