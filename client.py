@@ -338,7 +338,7 @@ def open_profile(page: ft.Page, on_reboot_callback):
     profile_page = ft.View(
         route="/profile",
         controls=[
-            ft.AppBar(title=ft.Text("Settings & Profile", color=WHITE), bgcolor=BLACK),
+            ft.AppBar(title=ft.Text("Profile Settings", color=RED_MAGENTA), bgcolor=BLACK),
             ft.Container(
                 content=profile_content, 
                 alignment=ft.Alignment.TOP_CENTER, 
@@ -847,16 +847,27 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
         ))
     
     # --- Desktop UI ---
+    # separated profile and Friend list
     left_column = ft.Container(
         col={"xs": 12, "md": 3, "lg": 2, "xl": 2},
         expand=True,
         padding=10,
-        border=ft.border.all(1, RED_MAGENTA),
+        border=ft.Border.all(1, RED_MAGENTA),
         content=ft.Column([
+            # TOP - profile/settings
             ft.Row([
-                ft.Text("Friends List", color=WHITE, weight="bold"),
-                ft.IconButton(ft.Icons.SETTINGS, icon_color=ft.Colors.WHITE54, on_click=lambda e: open_profile(page, on_reboot_callback))
+                ft.Text("My profile", color=WHITE, weight="bold"),
+                ft.IconButton(
+                    ft.Icons.SETTINGS, 
+                    icon_color=ft.Colors.GREY, 
+                    on_click=lambda e: open_profile(page, on_reboot_callback)
+                )
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            
+            # separator
+            ft.Divider(color=RED_MAGENTA, height=1),
+            # Friend list
+            ft.Text("Friend list", color=WHITE, weight="bold"),
             user_list
         ])
     )
