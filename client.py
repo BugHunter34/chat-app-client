@@ -34,15 +34,55 @@ EMOJI_MAP = {
     #":fire:": f"{API_URL}/emojis/fire.png"
 }
 
-# ---- parses text messages to inject emojis or images ----
-def parse_message_to_ui(prefix_text, message_content, text_color):
-    #split messages into text/emoji 
+# ---- customizes messages to allow file/emoji injecting ----
+def render_file_or_text_to_ui(prefix_text, message_content, text_color):
+    # split to check for emoji/file
     ui_controls = [ft.Text(f"{prefix_text}: ", color=text_color, weight="bold")]
 
-    # if it starts with IMG it will render bigger instead of text/emoji
-    if message_content.startswith("[IMG]"):
-        img_url = message_content.replace("[IMG]", "").strip() 
-        ui_controls.append(ft.Image(src=img_url, width=250, height=250, border_radius=10, fit=ft.BoxFit.CONTAIN))
+    # check for File
+    if message_content.startswith("[FILE]"):
+        file_url = message_content.replace("[FILE]", "").strip() 
+        filename = file_url.split("/")[-1] # grab extension from url (like: /images/cat.png -> .png)
+        
+        # check for common image types
+        image_exts = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg')
+        
+        # if it's image render it as one
+        if file_url.lower().endswith(image_exts):
+            ui_controls.append(
+                ft.Image(src=file_url, width=250, height=250, border_radius=10, fit=ft.BoxFit.CONTAIN)
+            )
+            
+        # if it's not an image render it in box so user can download it
+        else:
+            
+            async def handle_download(e):
+                # download must be async (waits for browser)
+                # e.page redirects to the image url which starts the download
+                await e.page.launch_url(file_url)
+
+            file_card = ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(ft.Icons.INSERT_DRIVE_FILE, color=ft.Colors.BLUE_400),
+                        # shortens filename
+                        ft.Text(filename[:20] + "..." if len(filename) > 20 else filename, expand=True), 
+                        ft.IconButton(
+                            icon=ft.Icons.DOWNLOAD,
+                            tooltip="Download",
+                            on_click=handle_download
+                        )
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+                ),
+                border=ft.border.all(1, ft.Colors.GREEN),
+                border_radius=8,
+                padding=10,
+                width=250,
+                bgcolor=ft.Colors.RED.with_opacity(0.25, RED_MAGENTA)
+            )
+            ui_controls.append(file_card)
+            
         return ft.Row(controls=ui_controls, vertical_alignment=ft.CrossAxisAlignment.START)
     
     # split to check for codes
@@ -56,7 +96,7 @@ def parse_message_to_ui(prefix_text, message_content, text_color):
                 current_text = "" # Reset
             
             # add the tiny emoji
-            ui_controls.append(ft.Image(src=EMOJI_MAP[word], width=24, height=24))
+            ui_controls.append(ft.Image(src=EMOJI_MAP[word], width=36, height=36))
         else:
             # the rest of text
             current_text += word + " "
@@ -83,6 +123,18 @@ def show_snack(page: ft.Page, msg: str, color: str):
 
 # ---- file uploader ----
 async def upload_to_server(f: ft.FilePickerFile, API_URL: str, is_web: bool, file_picker: ft.FilePicker, sender: str, receiver: str = None):
+    # 50MB
+    max_file_size = 50 * 1024 * 1024 
+    
+    if f.size and f.size > max_file_size:
+        # handles faster return so it doesn't wait for server and freeze
+        file_size_mb = f.size / (1024 * 1024)
+        return {
+            "status": "error", 
+            "message": f"File too large ({file_size_mb:.1f}MB). Please send files < 50MB"
+        }
+
+
     try:
         if is_web:
             upload_url = f"{API_URL}/upload?sender={sender}"
@@ -362,7 +414,7 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
                 prefix = "You" if sender == current_username else sender
                 
                 # build the emoji/text 
-                bubble = parse_message_to_ui(prefix, content, color)
+                bubble = render_file_or_text_to_ui(prefix, content, color)
                 chat_display.controls.append(bubble)
                 
         page.update()
@@ -514,7 +566,7 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
 
                 if app_state["active_chat"] == sender:
                     # draw emoji/text 
-                    bubble = parse_message_to_ui(sender, content, WHITE)
+                    bubble = render_file_or_text_to_ui(sender, content, WHITE)
                     chat_display.controls.append(bubble)
                     chat_display.update()
                 else:
@@ -630,18 +682,19 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
         friend = app_state["active_chat"]
         
         show_snack(page, "Uploading image...", NEON_GREEN) 
+        move_chat_input()
 
         res = await upload_to_server(f, API_URL, IS_WEB, file_picker, current_username, receiver=friend)
 
         if res.get("status") == "success":
             if not IS_WEB:
                 img_url = res["url"] 
-                msg_text = f"[IMG]{img_url}"
+                msg_text = f"[FILE]{img_url}"
                 
                 # save to cache
                 app_state["local_chat_history"][friend].append({"sender": current_username, "content": msg_text})
                 
-                bubble = parse_message_to_ui("You", msg_text, NEON_GREEN) 
+                bubble = render_file_or_text_to_ui("You", msg_text, NEON_GREEN) 
                 chat_display.controls.append(bubble)
                 page.update()
 

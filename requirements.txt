@@ -3,3 +3,4 @@ flet_audio
 requests 
 pyodide-http
 websockets
+asyncio
