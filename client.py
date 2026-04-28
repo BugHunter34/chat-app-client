@@ -5,14 +5,14 @@ import asyncio
 import json
 import time
 
-# --- Cross Platform ---
+# --- Cross Platform identifier ---
 try:
     # Web Mode (Pyodide)
     import js
     from pyodide.ffi import create_proxy
     IS_WEB = True
 except ImportError:
-    # Desktop Mode 
+    # Desktop Mode (Websockets)
     import websockets
     IS_WEB = False
 
@@ -900,7 +900,7 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
 
     mobile_appbar = ft.AppBar(
         leading=ft.IconButton(ft.Icons.MENU, icon_color=NEON_GREEN, on_click=lambda e: page.open(mobile_drawer)),
-        title=ft.Text("Andhyy Chat", color=WHITE, weight="bold"),
+        title=ft.Text("Fluxedus", color=WHITE, weight="bold"),
         bgcolor=BLACK,
         actions=[
             ft.IconButton(ft.Icons.MANAGE_ACCOUNTS, icon_color=NEON_GREEN, on_click=lambda e: open_profile(page, on_reboot_callback)),
@@ -952,7 +952,7 @@ def build_chat_ui(page: ft.Page, current_username, role, initial_friends, initia
 
 # ---- MAIN ----
 def main(page: ft.Page):
-    page.title = "Andhyy Chat"
+    page.title = "Fluxedus"
     page.bgcolor = DARK_GREY
     page.window.width = 1200
     page.window.height = 800
@@ -1165,7 +1165,6 @@ def main(page: ft.Page):
 
                     # this will unlock audio on web since browser can't play mp3 until user interacts with the app
                     def unlock_audio_and_enter(e):
-                        # play nothing - just so it can work
                         page.run_task(WB_sound.play)
                     
                         # Build the UI
